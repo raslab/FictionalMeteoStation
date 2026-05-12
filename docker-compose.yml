@@ -36,6 +36,8 @@ services:
       - redpanda
     volumes:
       - ./spark/jobs:/opt/spark/jobs
+      - ./spark/checkpoints:/opt/spark/checkpoints
+      - ./spark/lake:/opt/spark/lake
     environment:
       HOME: /tmp
       SPARK_LOCAL_DIRS: /tmp/spark-local
@@ -43,7 +45,7 @@ services:
     command: >
       /opt/spark/bin/spark-shell
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.8
-      --conf spark.sql.streaming.checkpointLocation=/tmp/spark-checkpoints
+      --conf spark.sql.streaming.checkpointLocation=/opt/spark/checkpoints
       -i /opt/spark/jobs/rover-stream.scala
 
   rover-emulator:

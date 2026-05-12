@@ -55,17 +55,20 @@ val cleanTelemetry = parsedTelemetry
   .withWatermark("eventTime", "30 seconds")
   .dropDuplicates("eventId")
 
-val query = cleanTelemetry
+val output = cleanTelemetry
+  .withColumn("eventDate", to_date(col("eventTime")))
+
+val query = output
   .writeStream
-  .format("console")
+  .format("parquet")
   .outputMode("append")
-  .option("truncate", "false")
-  .option("numRows", "20")
-  .option("checkpointLocation", "/tmp/spark-checkpoints/rover-stream-console")
-  .trigger(Trigger.ProcessingTime("5 seconds"))
+  .option("path", "/opt/spark/lake/rover-telemetry-clean")
+  .option("checkpointLocation", "/tmp/spark-checkpoints/rover-stream-parquet")
+  .partitionBy("eventDate")
+  .trigger(Trigger.ProcessingTime("10 seconds"))
   .start()
 
-println(s"Started Spark stream from Kafka topic: $inputTopic")
-println(s"Kafka bootstrap servers: $kafkaBootstrapServers")
+println(s"Started Spark parquet sink from Kafka topic: $inputTopic")
+println("Writing to /opt/spark/lake/rover-telemetry-clean")
 
 query.awaitTermination()

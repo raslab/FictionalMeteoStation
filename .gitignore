@@ -1,1 +1,7 @@
 *.log
+
+spark/checkpoints/*
+!spark/checkpoints/.gitkeep
+
+spark/lake/*
+!spark/lake/.gitkeep
