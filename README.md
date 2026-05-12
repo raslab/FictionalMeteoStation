@@ -7,9 +7,10 @@ A compact learning playground for real-time telemetry processing with .NET, Kafk
 ## Contents
 
 - [What This Project Is](#what-this-project-is)
-- [Demo At A Glance](#demo-at-a-glance)
-- [Architecture](#architecture)
-- [Data Flow](#data-flow)
+- [System Map](#system-map)
+- [Pipeline](#pipeline)
+- [Runtime Steps](#runtime-steps)
+- [Event And State Templates](#event-and-state-templates)
 - [Screenshots](#screenshots)
 - [Prerequisites](#prerequisites)
 - [Run Locally](#run-locally)
@@ -33,7 +34,43 @@ The goal is not to build a production fleet platform. The goal is to make the mo
 
 The current Spark job focuses on parsing, normalization, Kafka output topics, Parquet history export, and simple alert derivation. Watermarking, event-time deduplication, and advanced anomaly detection are listed as future learning steps below.
 
-## Demo At A Glance
+## System Map
+
+![System overview infographic](./docs/diagrams/system-overview.jpg)
+
+<details>
+<summary>Mermaid system map</summary>
+
+```mermaid
+flowchart TB
+    subgraph Generate["Generate"]
+        EM["Rover Emulator<br/>.NET 9 worker<br/>Kafka producer"]
+    end
+
+    subgraph Stream["Stream"]
+        RP["Redpanda<br/>Kafka-compatible broker"]
+        SP["Spark Structured Streaming<br/>parse, normalize, alert, export"]
+    end
+
+    subgraph Store["Store"]
+        MAT["Fleet State Materializer<br/>.NET Kafka consumers"]
+        LAKE["Parquet lake<br/>spark/lake"]
+        REDIS["Redis<br/>latest state + recent alerts"]
+    end
+
+    subgraph Show["Show"]
+        API["Fleet Dashboard API<br/>ASP.NET Core"]
+        UI["Browser dashboard<br/>map + alerts"]
+    end
+
+    EM --> RP --> SP
+    SP --> LAKE
+    SP --> RP
+    RP --> MAT --> REDIS
+    REDIS --> API --> UI
+```
+
+</details>
 
 | Area | Technology | Source |
 | --- | --- | --- |
@@ -46,7 +83,12 @@ The current Spark job focuses on parsing, normalization, Kafka output topics, Pa
 | Dashboard UI | Static HTML/CSS/JS | [index.html](./src/FleetDashboard/wwwroot/index.html), [app.js](./src/FleetDashboard/wwwroot/js/app.js), [site.css](./src/FleetDashboard/wwwroot/css/site.css) |
 | Shared event contracts | .NET records | [Telemetry.Contracts](./src/Telemetry.Contracts) |
 
-## Architecture
+## Pipeline
+
+![Streaming pipeline infographic](./docs/diagrams/streaming-pipeline.png)
+
+<details>
+<summary>Mermaid pipeline diagram</summary>
 
 ```mermaid
 flowchart LR
@@ -62,9 +104,11 @@ flowchart LR
     API --> UI[Browser dashboard]
 ```
 
+</details>
+
 Spark owns stream-time parsing, normalization, alert derivation, and historical Parquet export. The .NET materializer consumes Spark output topics and writes the Redis read model. The dashboard stays intentionally simple: it reads Redis-backed HTTP APIs and renders the current fleet state.
 
-## Data Flow
+## Runtime Steps
 
 1. [RoverEmulator](./src/RoverEmulator) simulates rover movement, heading changes, battery drain, and air-quality sampling.
 2. It publishes raw telemetry events to `rover.telemetry.raw`, keyed by `roverId`.
@@ -74,6 +118,112 @@ Spark owns stream-time parsing, normalization, alert derivation, and historical 
 6. [FleetStateMaterialization](./src/FleetStateMaterialization/FleetStateMaterializer.cs) consumes clean telemetry and alerts from Kafka.
 7. Redis stores latest rover state, active rover IDs, and recent alerts.
 8. [FleetDashboard](./src/FleetDashboard) exposes the state over HTTP and renders the live browser dashboard.
+
+## Event And State Templates
+
+![Event and state templates infographic](./docs/diagrams/event-state-templates.jpg)
+
+### Raw Rover Telemetry
+
+Published by [RoverEmulator](./src/RoverEmulator/RoverEmitterWorker.cs) to `rover.telemetry.raw`.
+
+```json
+{
+  "eventId": "8e0dbb63-5c8a-4c2f-bf8e-90cbe63db90a",
+  "roverId": "rover-6",
+  "stationId": "meteo-station-a",
+  "timestampUtc": "2026-05-12T12:14:10.212Z",
+  "lat": 52.231284,
+  "lon": 21.019447,
+  "headingDegrees": 128.4,
+  "speedMetersPerSecond": 3.2,
+  "batteryPercent": 43.0,
+  "airQualityIndex": 103,
+  "airQualityRaw": 0.66,
+  "isAlive": true,
+  "eventType": "telemetry",
+  "sequence": 142,
+  "traceId": "trace-rover-6-142"
+}
+```
+
+### Clean Telemetry
+
+Emitted by [Spark](./spark/jobs/rover-stream.scala) to `rover.telemetry.clean` and exported to Parquet under [spark/lake](./spark/lake).
+
+```json
+{
+  "eventId": "8e0dbb63-5c8a-4c2f-bf8e-90cbe63db90a",
+  "roverId": "rover-6",
+  "eventTime": "2026-05-12T12:14:10.212Z",
+  "latitude": 52.231284,
+  "longitude": 21.019447,
+  "headingDegrees": 128.4,
+  "speedMetersPerSecond": 3.2,
+  "airQualityIndex": 103,
+  "airQualityRaw": 0.66,
+  "batteryPercent": 43.0,
+  "isAlive": true,
+  "eventType": "telemetry",
+  "sequence": 142
+}
+```
+
+### Alert Rules
+
+Implemented in [rover-stream.scala](./spark/jobs/rover-stream.scala).
+
+| Rule | Alert type | Output topic |
+| --- | --- | --- |
+| `airQualityIndex >= 100` | `HIGH_AIR_POLLUTION` | `rover.alerts` |
+| `batteryPercent <= 20` | `LOW_BATTERY` | `rover.alerts` |
+
+Spark emits alert events in this shape:
+
+```json
+{
+  "alertId": "8e0dbb63-5c8a-4c2f-bf8e-90cbe63db90a:HIGH_AIR_POLLUTION",
+  "alertType": "HIGH_AIR_POLLUTION",
+  "eventId": "8e0dbb63-5c8a-4c2f-bf8e-90cbe63db90a",
+  "roverId": "rover-6",
+  "eventTime": "2026-05-12T12:14:10.212Z",
+  "latitude": 52.231284,
+  "longitude": 21.019447,
+  "airQualityIndex": 103,
+  "airQualityRaw": 0.66,
+  "batteryPercent": 43.0
+}
+```
+
+### Redis Materialized Shapes
+
+Written by [FleetStateMaterializer.cs](./src/FleetStateMaterialization/FleetStateMaterializer.cs) and read by [FleetDashboard](./src/FleetDashboard/Program.cs).
+
+| Redis key | Type | Example value |
+| --- | --- | --- |
+| `fleet:rovers:active` | set | `rover-1`, `rover-2`, `rover-6` |
+| `fleet:rover:{roverId}:latest` | string JSON | latest [RoverFleetState](./src/Telemetry.Contracts/RoverFleetState.cs) |
+| `fleet:alerts:latest` | list | recent [FleetAlert](./src/Telemetry.Contracts/FleetAlert.cs) payloads |
+| `fleet:alert:{alertId}` | string JSON | one alert payload by ID |
+
+Latest rover state:
+
+```json
+{
+  "roverId": "rover-6",
+  "lat": 52.231284,
+  "lon": 21.019447,
+  "headingDegrees": 128.4,
+  "speedMetersPerSecond": 3.2,
+  "batteryPercent": 43.0,
+  "airQualityIndex": 103,
+  "lastSeenUtc": "2026-05-12T12:14:10.212Z",
+  "status": "Warning",
+  "activeAlerts": ["HIGH_AIR_POLLUTION"],
+  "processedSequence": 142,
+  "lastEventId": "8e0dbb63-5c8a-4c2f-bf8e-90cbe63db90a"
+}
+```
 
 ## Screenshots
 
