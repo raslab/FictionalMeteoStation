@@ -1,20 +1,23 @@
-﻿using System.Text.Json;
+﻿using Confluent.Kafka;
 
-var roverId = Environment.GetEnvironmentVariable("ROVER_ID") ?? "rover-1";
+var builder = WebApplication.CreateBuilder(args);
 
-while (true)
+builder.Services.AddSingleton<IProducer<string, string>>(sp =>
 {
-    var telemetry = new
-    {
-        eventId = Guid.NewGuid().ToString("N"),
-        roverId,
-        eventTime = DateTimeOffset.UtcNow,
-        latitude = 52.5200 + Random.Shared.NextDouble() * 0.001,
-        longitude = 13.4050 + Random.Shared.NextDouble() * 0.001,
-        pm25 = 10 + Random.Shared.NextDouble() * 40,
-        batteryPercent = 60 + Random.Shared.NextDouble() * 40
-    };
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    var bootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092";
 
-    Console.WriteLine(JsonSerializer.Serialize(telemetry));
-    await Task.Delay(1000);
-}
+    return new ProducerBuilder<string, string>(new ProducerConfig
+    {
+        BootstrapServers = bootstrapServers,
+        Acks = Acks.All
+    }).Build();
+});
+
+builder.Services.AddHostedService<RoverEmitterWorker>();
+
+var app = builder.Build();
+
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+await app.RunAsync();

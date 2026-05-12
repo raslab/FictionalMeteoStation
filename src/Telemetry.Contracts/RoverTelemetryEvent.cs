@@ -1,0 +1,16 @@
+﻿public sealed record RoverTelemetryEvent(
+    Guid EventId,
+    string RoverId,
+    string StationId,
+    DateTime TimestampUtc,
+    double Lat,
+    double Lon,
+    double HeadingDegrees,
+    double SpeedMetersPerSecond,
+    double BatteryPercent,
+    int AirQualityIndex,
+    double AirQualityRaw,
+    bool IsAlive,
+    string EventType,
+    int Sequence,
+    string TraceId);
