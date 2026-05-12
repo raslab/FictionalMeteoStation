@@ -4,6 +4,11 @@ public sealed record CleanRoverTelemetryEvent(
     DateTime EventTime,
     double Latitude,
     double Longitude,
+    double HeadingDegrees,
+    double SpeedMetersPerSecond,
     int AirQualityIndex,
     double AirQualityRaw,
-    double BatteryPercent);
+    double BatteryPercent,
+    bool IsAlive,
+    string EventType,
+    int Sequence);

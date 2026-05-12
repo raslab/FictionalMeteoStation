@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleet Dashboard</title>
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <main class="dashboard-shell">
+    <section class="map-area" aria-label="Rover map">
+      <div id="map"></div>
+      <div class="map-status" id="map-status">Waiting for fleet state...</div>
+    </section>
+
+    <aside class="side-panel" aria-label="Fleet state and alerts">
+      <header class="panel-header">
+        <div>
+          <p class="eyebrow">Live Redis state</p>
+          <h1>Fleet Dashboard</h1>
+        </div>
+        <span class="connection-state" id="connection-state">Connecting</span>
+      </header>
+
+      <section class="stats-grid" aria-label="Fleet summary">
+        <div class="stat">
+          <span class="stat-value" id="total-count">0</span>
+          <span class="stat-label">Rovers</span>
+        </div>
+        <div class="stat healthy">
+          <span class="stat-value" id="healthy-count">0</span>
+          <span class="stat-label">Healthy</span>
+        </div>
+        <div class="stat warning">
+          <span class="stat-value" id="warning-count">0</span>
+          <span class="stat-label">Warning</span>
+        </div>
+        <div class="stat stale">
+          <span class="stat-value" id="stale-count">0</span>
+          <span class="stat-label">Stale</span>
+        </div>
+        <div class="stat dead">
+          <span class="stat-value" id="dead-count">0</span>
+          <span class="stat-label">Dead</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="last-update">--</span>
+          <span class="stat-label">Last update</span>
+        </div>
+      </section>
+
+      <section class="rover-list-section" aria-label="Rovers">
+        <div class="section-title">
+          <h2>Rovers</h2>
+        </div>
+        <div class="rover-list" id="rover-list">
+          <p class="empty-state">No rover state in Redis yet.</p>
+        </div>
+      </section>
+
+      <section class="alerts-section" aria-label="Latest alerts">
+        <div class="section-title">
+          <h2>Latest Alerts</h2>
+        </div>
+        <div class="alerts-list" id="alerts-list">
+          <p class="empty-state">No alerts yet.</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

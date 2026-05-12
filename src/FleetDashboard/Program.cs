@@ -1,41 +1,115 @@
+using System.Text.Json;
+using StackExchange.Redis;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+{
+    var redisOptions = ConfigurationOptions.Parse(builder.Configuration["Redis:Configuration"] ?? "localhost:6379");
+    redisOptions.AbortOnConnectFail = false;
+    return ConnectionMultiplexer.Connect(redisOptions);
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
-app.UseHttpsRedirection();
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-var summaries = new[]
+app.MapGet("/api/fleet/state", async (IConnectionMultiplexer redis) =>
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    var db = redis.GetDatabase();
+    var roverIds = await db.SetMembersAsync(RedisKeys.ActiveRovers);
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
+    if (roverIds.Length == 0)
+    {
+        return Results.Ok(Array.Empty<RoverFleetState>());
+    }
+
+    var keys = roverIds
+        .Where(id => id.HasValue)
+        .Select(id => (RedisKey)$"{RedisKeys.LatestTelemetryPrefix}{id}:latest")
         .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+
+    var values = await db.StringGetAsync(keys);
+    var states = values
+        .Where(value => value.HasValue)
+        .Select(value => JsonSerializer.Deserialize<RoverFleetState>(value!, RedisJson.Options))
+        .OfType<RoverFleetState>()
+        .Where(FleetStateValidation.IsCurrentShape)
+        .Select(Freshness.Apply)
+        .OrderBy(state => state.RoverId)
+        .ToArray();
+
+    return Results.Ok(states);
+});
+
+app.MapGet("/api/alerts/latest", async (IConnectionMultiplexer redis, int? take) =>
+{
+    var count = Math.Clamp(take ?? 20, 1, 100);
+    var db = redis.GetDatabase();
+    var values = await db.ListRangeAsync(RedisKeys.LatestAlerts, 0, count - 1);
+
+    var alerts = values
+        .Where(value => value.HasValue)
+        .Select(value => JsonSerializer.Deserialize<FleetAlert>(value!, RedisJson.Options))
+        .OfType<FleetAlert>()
+        .OrderByDescending(alert => alert.EventTime)
+        .ToArray();
+
+    return Results.Ok(alerts);
+});
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+static class RedisKeys
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    public const string LatestTelemetryPrefix = "fleet:rover:";
+    public const string ActiveRovers = "fleet:rovers:active";
+    public const string LatestAlerts = "fleet:alerts:latest";
+}
+
+static class RedisJson
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+}
+
+static class FleetStateValidation
+{
+    public static bool IsCurrentShape(RoverFleetState state) =>
+        !string.IsNullOrWhiteSpace(state.RoverId) &&
+        !string.IsNullOrWhiteSpace(state.LastEventId) &&
+        state.LastSeenUtc > DateTime.UnixEpoch &&
+        state.Lat is >= -90 and <= 90 &&
+        state.Lon is >= -180 and <= 180;
+}
+
+static class Freshness
+{
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(30);
+
+    public static RoverFleetState Apply(RoverFleetState state)
+    {
+        var activeAlerts = state.ActiveAlerts ?? Array.Empty<string>();
+        var lastSeen = state.LastSeenUtc.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(state.LastSeenUtc, DateTimeKind.Utc)
+            : state.LastSeenUtc.ToUniversalTime();
+
+        if (DateTime.UtcNow - lastSeen <= StaleAfter || state.Status == "Dead")
+        {
+            return state with { LastSeenUtc = lastSeen, ActiveAlerts = activeAlerts };
+        }
+
+        var alerts = activeAlerts.Contains("STALE_ROVER")
+            ? activeAlerts
+            : activeAlerts.Concat(["STALE_ROVER"]).ToArray();
+
+        return state with
+        {
+            LastSeenUtc = lastSeen,
+            Status = "Stale",
+            ActiveAlerts = alerts
+        };
+    }
 }

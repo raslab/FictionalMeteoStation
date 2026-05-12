@@ -5,6 +5,7 @@ using StackExchange.Redis;
 public sealed class FleetStateMaterializer : BackgroundService
 {
     private const int DefaultRedisKeyTtlSeconds = 300;
+    private const int StaleAfterSeconds = 30;
     private const string LatestTelemetryPrefix = "fleet:rover:";
     private const string ActiveRoversKey = "fleet:rovers:active";
     private const string LatestAlertsKey = "fleet:alerts:latest";
@@ -113,7 +114,21 @@ public sealed class FleetStateMaterializer : BackgroundService
 
     private async Task MaterializeTelemetryAsync(CleanRoverTelemetryEvent evt, IDatabase db)
     {
-        var json = JsonSerializer.Serialize(evt, JsonOptions);
+        var state = new RoverFleetState(
+            evt.RoverId,
+            evt.Latitude,
+            evt.Longitude,
+            evt.HeadingDegrees,
+            evt.SpeedMetersPerSecond,
+            evt.BatteryPercent,
+            evt.AirQualityIndex,
+            evt.EventTime,
+            GetStatus(evt),
+            GetActiveAlerts(evt),
+            evt.Sequence,
+            evt.EventId);
+
+        var json = JsonSerializer.Serialize(state, JsonOptions);
 
         await Task.WhenAll(
             db.StringSetAsync($"{LatestTelemetryPrefix}{evt.RoverId}:latest", json, _redisKeyTtl),
@@ -133,5 +148,47 @@ public sealed class FleetStateMaterializer : BackgroundService
         batch.Execute();
 
         await Task.WhenAll(pushAlert, trimAlerts, expireAlerts, setAlert);
+    }
+
+    private static string GetStatus(CleanRoverTelemetryEvent evt)
+    {
+        if (!evt.IsAlive || evt.BatteryPercent <= 0 || string.Equals(evt.EventType, "rover_died", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Dead";
+        }
+
+        if (DateTime.UtcNow - evt.EventTime.ToUniversalTime() > TimeSpan.FromSeconds(StaleAfterSeconds))
+        {
+            return "Stale";
+        }
+
+        if (evt.BatteryPercent <= 20 || evt.AirQualityIndex >= 100)
+        {
+            return "Warning";
+        }
+
+        return "Healthy";
+    }
+
+    private static IReadOnlyList<string> GetActiveAlerts(CleanRoverTelemetryEvent evt)
+    {
+        var alerts = new List<string>();
+
+        if (!evt.IsAlive || evt.BatteryPercent <= 0 || string.Equals(evt.EventType, "rover_died", StringComparison.OrdinalIgnoreCase))
+        {
+            alerts.Add("DEAD_ROVER");
+        }
+
+        if (evt.BatteryPercent <= 20)
+        {
+            alerts.Add("LOW_BATTERY");
+        }
+
+        if (evt.AirQualityIndex >= 100)
+        {
+            alerts.Add("HIGH_AIR_POLLUTION");
+        }
+
+        return alerts;
     }
 }

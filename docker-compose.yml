@@ -64,8 +64,12 @@ services:
     build:
       context: ./src
       dockerfile: FleetDashboard/Dockerfile
+    environment:
+      Redis__Configuration: redis:6379
     ports:
       - "8088:8080"
+    depends_on:
+      - redis
 
   fleet-state-materialization:
     build:

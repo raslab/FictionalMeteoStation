@@ -1,6 +1,5 @@
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.streaming.Trigger
 
 spark.sparkContext.setLogLevel("WARN")
 
@@ -13,9 +12,14 @@ val telemetrySchema = new StructType()
   .add("timestampUtc", StringType)
   .add("lat", DoubleType)
   .add("lon", DoubleType)
+  .add("headingDegrees", DoubleType)
+  .add("speedMetersPerSecond", DoubleType)
   .add("airQualityIndex", IntegerType)
   .add("airQualityRaw", DoubleType)
   .add("batteryPercent", DoubleType)
+  .add("isAlive", BooleanType)
+  .add("eventType", StringType)
+  .add("sequence", IntegerType)
 
 val rawKafka = spark.readStream
   .format("kafka")
@@ -44,29 +48,19 @@ val parsedTelemetry = rawKafka
     to_timestamp(col("data.timestampUtc")).as("eventTime"),
     col("data.lat").as("latitude"),
     col("data.lon").as("longitude"),
+    col("data.headingDegrees").as("headingDegrees"),
+    col("data.speedMetersPerSecond").as("speedMetersPerSecond"),
     col("data.airQualityIndex").as("airQualityIndex"),
     col("data.airQualityRaw").as("airQualityRaw"),
     col("data.batteryPercent").as("batteryPercent"),
+    col("data.isAlive").as("isAlive"),
+    col("data.eventType").as("eventType"),
+    col("data.sequence").as("sequence"),
     col("json")
   )
   .where(col("eventId").isNotNull)
 
 val cleanTelemetry = parsedTelemetry
-  .withWatermark("eventTime", "30 seconds")
-  .dropDuplicates("eventId")
-
-val parquetOutput = cleanTelemetry
-  .withColumn("eventDate", to_date(col("eventTime")))
-
-val parquetQuery = parquetOutput
-  .writeStream
-  .format("parquet")
-  .outputMode("append")
-  .option("path", "/opt/spark/lake/rover-telemetry-clean")
-  .option("checkpointLocation", "/tmp/spark-checkpoints/rover-stream-parquet")
-  .partitionBy("eventDate")
-  .trigger(Trigger.ProcessingTime("10 seconds"))
-  .start()
 
 val cleanKafkaOutput = cleanTelemetry
  .select(
@@ -77,9 +71,14 @@ val cleanKafkaOutput = cleanTelemetry
      col("eventTime"),
      col("latitude"),
      col("longitude"),
+     col("headingDegrees"),
+     col("speedMetersPerSecond"),
      col("airQualityIndex"),
      col("airQualityRaw"),
-     col("batteryPercent")
+     col("batteryPercent"),
+     col("isAlive"),
+     col("eventType"),
+     col("sequence")
    )).as("value")
  )
  .selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
@@ -89,9 +88,8 @@ val cleanKafkaQuery = cleanKafkaOutput
  .format("kafka")
  .option("kafka.bootstrap.servers", kafkaBootstrapServers)
  .option("topic", "rover.telemetry.clean")
- .option("checkpointLocation", "/tmp/spark-checkpoints/rover-telemetry-clean-kafka")
+ .option("checkpointLocation", "/opt/spark/checkpoints/rover-telemetry-clean-kafka-v3")
  .outputMode("append")
- .trigger(Trigger.ProcessingTime("5 seconds"))
  .start()
 
 val alerts = cleanTelemetry
@@ -126,13 +124,11 @@ val alertsKafkaQuery = alertsKafkaOutput
  .format("kafka")
  .option("kafka.bootstrap.servers", kafkaBootstrapServers)
  .option("topic", "rover.alerts")
- .option("checkpointLocation", "/tmp/spark-checkpoints/rover-alerts-kafka")
+ .option("checkpointLocation", "/opt/spark/checkpoints/rover-alerts-kafka-v3")
  .outputMode("append")
- .trigger(Trigger.ProcessingTime("5 seconds"))
  .start()
 
 println(s"Started Spark stream from Kafka topic: $inputTopic")
-println("Writing Parquet history to /opt/spark/lake/rover-telemetry-clean")
 println("Writing clean events to rover.telemetry.clean")
 println("Writing alerts to rover.alerts")
 

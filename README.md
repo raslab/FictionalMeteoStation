@@ -64,4 +64,11 @@ The product should highlight:
 docker compose up --build
 ```
 
+Dashboard:
+
+- UI: http://localhost:8088
+- Health: http://localhost:8088/health
+- Fleet state API: http://localhost:8088/api/fleet/state
+- Latest alerts API: http://localhost:8088/api/alerts/latest?take=20
+
 This repository is intentionally small and tutorial-oriented. Keep the architecture .NET-centered for the emulator and dashboard, with Spark as the event-time and stateful-streaming component.
