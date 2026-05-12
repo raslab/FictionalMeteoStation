@@ -27,6 +27,7 @@ val rawKafka = spark.readStream
   .option("kafka.bootstrap.servers", kafkaBootstrapServers)
   .option("subscribe", inputTopic)
   .option("startingOffsets", "latest")
+  .option("failOnDataLoss", "false")
   .load()
 
 val parsedTelemetry = rawKafka
