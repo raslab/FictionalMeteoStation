@@ -1,6 +1,4 @@
-public sealed record FleetAlert(
-    string AlertId,
-    string AlertType,
+public sealed record CleanRoverTelemetryEvent(
     string EventId,
     string RoverId,
     DateTime EventTime,
