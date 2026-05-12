@@ -2,37 +2,17 @@ public sealed class AirQualityField
 {
     public double Sample(double lat, double lon, double timeSeconds)
     {
-        var x = lat * 40.0;
-        var y = lon * 40.0;
-        var t = timeSeconds * 0.02;
+        var x = (lat - 52.2297) * 28.0;
+        var y = (lon - 21.0122) * 28.0;
+        var t = timeSeconds * 0.0008;
 
-        var v00 = HashNoise(Math.Floor(x), Math.Floor(y), t);
-        var v10 = HashNoise(Math.Floor(x) + 1, Math.Floor(y), t);
-        var v01 = HashNoise(Math.Floor(x), Math.Floor(y) + 1, t);
-        var v11 = HashNoise(Math.Floor(x) + 1, Math.Floor(y) + 1, t);
+        var broadGradient = 0.52 + 0.24 * Math.Sin(x * 0.8 + y * 0.35 + t);
+        var crossBreeze = 0.16 * Math.Sin(x * -0.25 + y * 0.9 - t * 0.7);
+        var localPocket = 0.08 * Math.Cos(x * 1.2 - y * 0.55 + t * 0.4);
 
-        var fx = SmoothStep(x - Math.Floor(x));
-        var fy = SmoothStep(y - Math.Floor(y));
-
-        var ix0 = Lerp(v00, v10, fx);
-        var ix1 = Lerp(v01, v11, fx);
-        var raw = Lerp(ix0, ix1, fy);
-
-        return raw;
+        return Math.Clamp(broadGradient + crossBreeze + localPocket, 0.0, 1.0);
     }
 
     public int ToAqi(double raw)
-        => (int)Math.Round(25 + raw * 175);
-
-    private static double HashNoise(double x, double y, double t)
-    {
-        var n = Math.Sin(x * 127.1 + y * 311.7 + t * 17.3) * 43758.5453;
-        return n - Math.Floor(n);
-    }
-
-    private static double SmoothStep(double value)
-        => value * value * (3 - 2 * value);
-
-    private static double Lerp(double a, double b, double amount)
-        => a + (b - a) * amount;
+        => (int)Math.Round(70 + raw * 50);
 }

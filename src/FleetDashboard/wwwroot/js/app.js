@@ -4,9 +4,12 @@ const BASE = {
 };
 
 const GRID_RANGE_DEGREES = 0.06;
+const MAX_TRACE_DOTS = 900;
 const mapEl = document.getElementById("map");
 const roverLayers = new Map();
 const gridLabels = [];
+let traceLayer;
+let traceEnabled = true;
 
 const els = {
   connection: document.getElementById("connection-state"),
@@ -18,11 +21,13 @@ const els = {
   dead: document.getElementById("dead-count"),
   lastUpdate: document.getElementById("last-update"),
   roverList: document.getElementById("rover-list"),
-  alertsList: document.getElementById("alerts-list")
+  alertsList: document.getElementById("alerts-list"),
+  traceToggle: document.getElementById("aqi-trace-toggle")
 };
 
 function setupGrid() {
   mapEl.innerHTML = `
+    <div class="aqi-trace-layer" id="aqi-trace-layer"></div>
     <div class="grid-axis lat-axis"></div>
     <div class="grid-axis lon-axis"></div>
     <div class="base-marker" title="Base station">
@@ -51,6 +56,12 @@ function setupGrid() {
     mapEl.appendChild(lonLabel);
     gridLabels.push(lonLabel);
   }
+
+  traceLayer = document.getElementById("aqi-trace-layer");
+  els.traceToggle.addEventListener("change", () => {
+    traceEnabled = els.traceToggle.checked;
+    traceLayer.classList.toggle("hidden", !traceEnabled);
+  });
 }
 
 function statusClass(status) {
@@ -62,6 +73,12 @@ function aqiClass(aqi) {
   if (aqi <= 100) return "moderate";
   if (aqi <= 150) return "unhealthy";
   return "hazard";
+}
+
+function aqiTraceColor(aqi) {
+  const normalized = Math.max(0, Math.min(1, (aqi - 50) / 90));
+  const hue = 128 - normalized * 128;
+  return `hsl(${hue} 78% 45%)`;
 }
 
 function percentFromLon(lon) {
@@ -132,6 +149,27 @@ function renderMap(roverStates) {
       <span class="rover-label">${rover.roverId}</span>
     `;
     layer.title = `${rover.roverId}: ${rover.status}, AQI ${rover.airQualityIndex}, battery ${rover.batteryPercent.toFixed(1)}%, seen ${formatAge(rover.lastSeenUtc)}`;
+
+    addTraceDot(rover, x, y);
+  }
+}
+
+function addTraceDot(rover, x, y) {
+  if (!traceLayer || !traceEnabled) {
+    return;
+  }
+
+  const dot = document.createElement("span");
+  dot.className = "aqi-trace-dot";
+  dot.style.left = `${x}%`;
+  dot.style.top = `${y}%`;
+  dot.style.color = aqiTraceColor(rover.airQualityIndex);
+  dot.style.background = aqiTraceColor(rover.airQualityIndex);
+  dot.title = `${rover.roverId} AQI ${rover.airQualityIndex}`;
+  traceLayer.appendChild(dot);
+
+  while (traceLayer.childElementCount > MAX_TRACE_DOTS) {
+    traceLayer.firstElementChild.remove();
   }
 }
 
