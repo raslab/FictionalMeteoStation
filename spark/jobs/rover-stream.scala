@@ -5,6 +5,7 @@ spark.sparkContext.setLogLevel("WARN")
 
 val kafkaBootstrapServers = sys.env.getOrElse("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
 val inputTopic = sys.env.getOrElse("KAFKA_TOPIC", "rover.telemetry.raw")
+val telemetryLakePath = sys.env.getOrElse("SPARK_LAKE_PATH", "/opt/spark/lake/rover_telemetry")
 
 val telemetrySchema = new StructType()
   .add("eventId", StringType)
@@ -92,6 +93,16 @@ val cleanKafkaQuery = cleanKafkaOutput
  .outputMode("append")
  .start()
 
+val parquetLakeQuery = cleanTelemetry
+ .withColumn("eventDate", to_date(col("eventTime")))
+ .writeStream
+ .format("parquet")
+ .option("path", telemetryLakePath)
+ .option("checkpointLocation", "/opt/spark/checkpoints/rover-telemetry-parquet-v3")
+ .partitionBy("eventDate")
+ .outputMode("append")
+ .start()
+
 val alerts = cleanTelemetry
  .where(col("airQualityIndex") >= 100 || col("batteryPercent") <= 20)
  .withColumn(
@@ -130,6 +141,7 @@ val alertsKafkaQuery = alertsKafkaOutput
 
 println(s"Started Spark stream from Kafka topic: $inputTopic")
 println("Writing clean events to rover.telemetry.clean")
+println(s"Writing clean telemetry history to Parquet: $telemetryLakePath")
 println("Writing alerts to rover.alerts")
 
 spark.streams.awaitAnyTermination()

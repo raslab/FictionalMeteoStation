@@ -31,7 +31,7 @@ The goal is not to build a production fleet platform. The goal is to make the mo
 - why Redis is useful for low-latency materialized views
 - when Spark is useful, and when a simpler .NET-only pipeline would be enough
 
-The current Spark job focuses on parsing, normalization, Kafka output topics, and simple alert derivation. Watermarking, event-time deduplication, Parquet history, and advanced anomaly detection are listed as future learning steps below.
+The current Spark job focuses on parsing, normalization, Kafka output topics, Parquet history export, and simple alert derivation. Watermarking, event-time deduplication, and advanced anomaly detection are listed as future learning steps below.
 
 ## Demo At A Glance
 
@@ -40,6 +40,7 @@ The current Spark job focuses on parsing, normalization, Kafka output topics, an
 | Telemetry producer | .NET 9 Worker, Confluent Kafka producer | [RoverEmitterWorker.cs](./src/RoverEmulator/RoverEmitterWorker.cs) |
 | Event bus | Redpanda, Kafka-compatible local broker | [docker-compose.yml](./docker-compose.yml) |
 | Stream processing | Spark Structured Streaming | [rover-stream.scala](./spark/jobs/rover-stream.scala) |
+| Historical lake export | Partitioned Parquet files | [spark/lake](./spark/lake) |
 | Materialized state | Redis | [FleetStateMaterializer.cs](./src/FleetStateMaterialization/FleetStateMaterializer.cs) |
 | Dashboard API | ASP.NET Core minimal API | [FleetDashboard/Program.cs](./src/FleetDashboard/Program.cs) |
 | Dashboard UI | Static HTML/CSS/JS | [index.html](./src/FleetDashboard/wwwroot/index.html), [app.js](./src/FleetDashboard/wwwroot/js/app.js), [site.css](./src/FleetDashboard/wwwroot/css/site.css) |
@@ -53,6 +54,7 @@ flowchart LR
     RAW --> SP[Spark Structured Streaming]
     SP --> CLEAN[rover.telemetry.clean<br/>Kafka topic]
     SP --> ALERTS[rover.alerts<br/>Kafka topic]
+    SP --> LAKE[Parquet history<br/>spark/lake]
     CLEAN --> MAT[Fleet State Materializer<br/>.NET consumers]
     ALERTS --> MAT
     MAT --> REDIS[(Redis<br/>latest fleet state<br/>recent alerts)]
@@ -60,17 +62,18 @@ flowchart LR
     API --> UI[Browser dashboard]
 ```
 
-Spark owns stream-time parsing, normalization, and alert derivation. The .NET materializer consumes Spark output topics and writes the Redis read model. The dashboard stays intentionally simple: it reads Redis-backed HTTP APIs and renders the current fleet state.
+Spark owns stream-time parsing, normalization, alert derivation, and historical Parquet export. The .NET materializer consumes Spark output topics and writes the Redis read model. The dashboard stays intentionally simple: it reads Redis-backed HTTP APIs and renders the current fleet state.
 
 ## Data Flow
 
 1. [RoverEmulator](./src/RoverEmulator) simulates rover movement, heading changes, battery drain, and air-quality sampling.
 2. It publishes raw telemetry events to `rover.telemetry.raw`, keyed by `roverId`.
 3. [Spark](./spark/jobs/rover-stream.scala) reads the raw Kafka topic, parses JSON, normalizes field names, and writes clean events to `rover.telemetry.clean`.
-4. The same Spark job derives alert events for high air pollution and low battery, then writes them to `rover.alerts`.
-5. [FleetStateMaterialization](./src/FleetStateMaterialization/FleetStateMaterializer.cs) consumes clean telemetry and alerts from Kafka.
-6. Redis stores latest rover state, active rover IDs, and recent alerts.
-7. [FleetDashboard](./src/FleetDashboard) exposes the state over HTTP and renders the live browser dashboard.
+4. Spark also appends clean telemetry history to partitioned Parquet files under [spark/lake](./spark/lake).
+5. The same Spark job derives alert events for high air pollution and low battery, then writes them to `rover.alerts`.
+6. [FleetStateMaterialization](./src/FleetStateMaterialization/FleetStateMaterializer.cs) consumes clean telemetry and alerts from Kafka.
+7. Redis stores latest rover state, active rover IDs, and recent alerts.
+8. [FleetDashboard](./src/FleetDashboard) exposes the state over HTTP and renders the live browser dashboard.
 
 ## Screenshots
 
@@ -127,6 +130,7 @@ curl -s http://localhost:8088/api/fleet/state | jq .
 curl -s "http://localhost:8088/api/alerts/latest?take=10" | jq .
 docker compose exec -T redis redis-cli --raw SMEMBERS fleet:rovers:active
 docker compose exec -T redis redis-cli --raw GET fleet:rover:rover-1:latest | jq .
+find spark/lake -type f -name "*.parquet" | sort
 ```
 
 ## Domain Model
@@ -170,6 +174,7 @@ Each raw telemetry event includes location, heading, speed, battery, air-quality
 - parsing JSON into a typed schema
 - projecting a cleaner event shape
 - writing stream output back to Kafka
+- exporting clean telemetry history to partitioned Parquet files under [spark/lake](./spark/lake)
 - deriving a second alert stream from the same source
 - checkpointing streaming queries under [spark/checkpoints](./spark/checkpoints)
 
@@ -202,6 +207,7 @@ This project is deliberately split so each technology has a clear job:
 
 - .NET is responsible for simulation, Kafka producer/consumer integration, Redis materialization, and the HTTP dashboard.
 - Spark is responsible for stream parsing, transformation, and derived alert streams.
+- Parquet files under [spark/lake](./spark/lake) provide a local historical data set for replay, inspection, and batch-style Spark practice.
 - Kafka/Redpanda is responsible for buffering and topic-based event flow.
 - Redis is responsible for fast queryable state for the UI.
 
@@ -212,7 +218,6 @@ That split makes it easier to discuss common real-time processing questions: eve
 The current implementation is intentionally small. Good next learning steps:
 
 - Add Spark watermarking and event-time deduplication by `eventId`.
-- Write historical telemetry to Parquet under [spark/lake](./spark/lake).
 - Move stale rover detection fully into the streaming layer.
 - Add impossible-jump detection from speed, heading, and previous position.
 - Add Docker healthchecks and startup readiness checks.
