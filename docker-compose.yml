@@ -28,7 +28,9 @@ services:
     command: ["/opt/spark/bin/spark-shell"]
 
   rover-emulator:
-    build: ./src/RoverEmulator
+    build:
+      context: ./src
+      dockerfile: RoverEmulator/Dockerfile
     environment:
       Kafka__BootstrapServers: redpanda:9092
       Simulation__OriginLat: 52.2297
@@ -38,7 +40,9 @@ services:
       - redpanda
 
   dashboard:
-    build: ./src/FleetDashboard
+    build:
+      context: ./src
+      dockerfile: FleetDashboard/Dockerfile
     environment:
       Redis__Configuration: redis:6379
     ports:
