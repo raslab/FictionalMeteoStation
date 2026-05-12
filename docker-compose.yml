@@ -32,9 +32,19 @@ services:
 
   spark:
     image: apache/spark:3.5.8-scala2.12-java17-python3-r-ubuntu
-    ports:
-      - "4040:4040"
-    command: ["/opt/spark/bin/spark-shell"]
+    depends_on:
+      - redpanda
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+    environment:
+      HOME: /tmp
+      SPARK_LOCAL_DIRS: /tmp/spark-local
+      SPARK_SUBMIT_OPTS: -Duser.home=/tmp -Divy.home=/tmp/.ivy2 -Divy.cache.dir=/tmp/.ivy2/cache
+    command: >
+      /opt/spark/bin/spark-shell
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.8
+      --conf spark.sql.streaming.checkpointLocation=/tmp/spark-checkpoints
+      -i /opt/spark/jobs/rover-stream.scala
 
   rover-emulator:
     build:
