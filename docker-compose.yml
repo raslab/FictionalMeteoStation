@@ -25,6 +25,19 @@ services:
     depends_on:
       - redpanda
 
+  redpanda-init:
+    image: redpandadata/redpanda:v24.1.8
+    depends_on:
+      - redpanda
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "
+      until rpk cluster info --brokers redpanda:9092; do sleep 1; done;
+      rpk topic create rover.telemetry.raw --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
+      rpk topic create rover.telemetry.clean --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
+      rpk topic create rover.alerts --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
+      "
+
   redis:
     image: redis:7
     ports:
@@ -33,7 +46,8 @@ services:
   spark:
     image: apache/spark:3.5.8-scala2.12-java17-python3-r-ubuntu
     depends_on:
-      - redpanda
+      redpanda-init:
+        condition: service_completed_successfully
     volumes:
       - ./spark/jobs:/opt/spark/jobs
       - ./spark/checkpoints:/opt/spark/checkpoints
@@ -56,9 +70,11 @@ services:
       Kafka__BootstrapServers: redpanda:9092
       Simulation__OriginLat: 52.2297
       Simulation__OriginLon: 21.0122
-      Simulation__InitialRoverCount: 8
+      Simulation__InitialRoverCount: 5000
+      Simulation__RoversReportingLoopTimeSec: 1.0
     depends_on:
-      - redpanda
+      redpanda-init:
+        condition: service_completed_successfully
 
   dashboard:
     build:
@@ -77,7 +93,10 @@ services:
       dockerfile: FleetStateMaterialization/Dockerfile
     environment:
       Kafka__BootstrapServers: redpanda:9092
+      Kafka__ConsumersPerTopic: 24
       Redis__Configuration: redis:6379
     depends_on:
-      - redpanda
-      - redis
+      redpanda-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started

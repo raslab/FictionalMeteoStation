@@ -10,6 +10,7 @@ public sealed class RoverEmitterWorker : BackgroundService
     private readonly RoverMotionModel _motion = new();
     private readonly AirQualityField _air = new();
     private readonly string _topic;
+    private readonly TimeSpan _roversReportingLoopTimeSec;
 
     public RoverEmitterWorker(
         IProducer<string, string> producer,
@@ -19,6 +20,7 @@ public sealed class RoverEmitterWorker : BackgroundService
         _producer = producer;
         _logger = logger;
         _topic = configuration["Kafka:Topic"] ?? "rover.telemetry.raw";
+        _roversReportingLoopTimeSec = TimeSpan.FromSeconds(Math.Max(0.1d, configuration.GetValue("Simulation:RoversReportingLoopTimeSec", 1.0d)));
 
         var originLat = configuration.GetValue("Simulation:OriginLat", 52.2297);
         var originLon = configuration.GetValue("Simulation:OriginLon", 21.0122);
@@ -43,9 +45,8 @@ public sealed class RoverEmitterWorker : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            foreach (var rover in _rovers)
-            {
-                _motion.Advance(rover, TimeSpan.FromSeconds(2));
+            var tasks = _rovers.Select(rover=> {
+                _motion.Advance(rover, _roversReportingLoopTimeSec);
 
                 var rawAir = _air.Sample(rover.Lat, rover.Lon, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 var evt = new RoverTelemetryEvent(
@@ -66,14 +67,23 @@ public sealed class RoverEmitterWorker : BackgroundService
                     $"trace-{rover.RoverId}-{rover.Sequence}");
 
                 var payload = JsonSerializer.Serialize(evt, _json);
-                await _producer.ProduceAsync(_topic, new Message<string, string>
+                return _producer.ProduceAsync(_topic, new Message<string, string>
                 {
                     Key = evt.RoverId,
                     Value = payload
                 }, stoppingToken);
+            });
+            try
+            {
+                await Task.WhenAll(tasks);
+            }
+            catch (Exception e)
+            {
+                _logger.LogError(e, "Error while emitirng rovers batch.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+
+            await Task.Delay(_roversReportingLoopTimeSec, stoppingToken);
         }
     }
 }

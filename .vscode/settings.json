@@ -1,0 +1,7 @@
+{
+  "dotnet.defaultSolution": "RoverTelemetry.sln",
+  "dotnet.preferCSharpExtension": true,
+  "omnisharp.defaultLaunchSolution": "RoverTelemetry.sln",
+  "omnisharp.useModernNet": true,
+  "editor.semanticHighlighting.enabled": true
+}

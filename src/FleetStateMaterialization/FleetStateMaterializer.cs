@@ -32,19 +32,27 @@ public sealed class FleetStateMaterializer : BackgroundService
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var tasks = new[]
-        {
-            ConsumeTopicAsync<CleanRoverTelemetryEvent>(
+        var consumersPerTopic = Math.Max(1, _configuration.GetValue("Kafka:ConsumersPerTopic", 24));
+
+        var telemetryTasks = Enumerable.Range(1, consumersPerTopic)
+            .Select(consumerInstance => ConsumeTopicAsync<CleanRoverTelemetryEvent>(
                 _configuration["Kafka:TelemetryTopic"] ?? "rover.telemetry.clean",
                 "telemetry",
+                consumerInstance,
+                consumersPerTopic,
                 MaterializeTelemetryAsync,
-                stoppingToken),
-            ConsumeTopicAsync<FleetAlert>(
+                stoppingToken));
+
+        var alertTasks = Enumerable.Range(1, consumersPerTopic)
+            .Select(consumerInstance => ConsumeTopicAsync<FleetAlert>(
                 _configuration["Kafka:AlertsTopic"] ?? "rover.alerts",
                 "alerts",
+                consumerInstance,
+                consumersPerTopic,
                 MaterializeAlertAsync,
-                stoppingToken)
-        };
+                stoppingToken));
+
+        var tasks = telemetryTasks.Concat(alertTasks);
 
         return Task.WhenAll(tasks);
     }
@@ -52,22 +60,51 @@ public sealed class FleetStateMaterializer : BackgroundService
     private async Task ConsumeTopicAsync<TEvent>(
         string topic,
         string consumerName,
+        int consumerInstance,
+        int consumerCount,
         Func<TEvent, IDatabase, Task> materialize,
         CancellationToken stoppingToken)
     {
+        var clientId = _configuration["Kafka:ClientId"] ?? "fleet-state-materialization";
         var consumerConfig = new ConsumerConfig
         {
             BootstrapServers = _configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
             GroupId = _configuration["Kafka:GroupId"] ?? "fleet-state-materialization",
+            ClientId = $"{clientId}-{consumerName}-{consumerInstance}",
             AutoOffsetReset = AutoOffsetReset.Latest,
             EnableAutoCommit = true
         };
 
-        using var consumer = new ConsumerBuilder<string, string>(consumerConfig).Build();
+        using var consumer = new ConsumerBuilder<string, string>(consumerConfig)
+            .SetPartitionsAssignedHandler((_, partitions) =>
+            {
+                _logger.LogInformation(
+                    "Assigned {PartitionCount} partitions to {ConsumerName} consumer {ConsumerInstance}/{ConsumerCount}: {Partitions}",
+                    partitions.Count,
+                    consumerName,
+                    consumerInstance,
+                    consumerCount,
+                    string.Join(", ", partitions.Select(partition => partition.Partition.Value)));
+            })
+            .SetPartitionsRevokedHandler((_, partitions) =>
+            {
+                _logger.LogInformation(
+                    "Revoked {PartitionCount} partitions from {ConsumerName} consumer {ConsumerInstance}/{ConsumerCount}.",
+                    partitions.Count,
+                    consumerName,
+                    consumerInstance,
+                    consumerCount);
+            })
+            .Build();
         var db = _redis.GetDatabase();
 
         consumer.Subscribe(topic);
-        _logger.LogInformation("Consuming {ConsumerName} from Kafka topic {Topic}.", consumerName, topic);
+        _logger.LogInformation(
+            "Consuming {ConsumerName} from Kafka topic {Topic} with consumer {ConsumerInstance}/{ConsumerCount}.",
+            consumerName,
+            topic,
+            consumerInstance,
+            consumerCount);
 
         try
         {
