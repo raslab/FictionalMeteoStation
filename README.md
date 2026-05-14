@@ -1,4 +1,4 @@
-# Spark Learn
+# FictionalMeteoStation
 
 A compact learning playground for real-time telemetry processing with .NET, Kafka-compatible streaming, Spark Structured Streaming, Redis materialized state, and a live dashboard.
 
