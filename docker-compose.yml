@@ -33,9 +33,9 @@ services:
     command: >
       "
       until rpk cluster info --brokers redpanda:9092; do sleep 1; done;
-      rpk topic create rover.telemetry.raw --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
-      rpk topic create rover.telemetry.clean --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
-      rpk topic create rover.alerts --brokers redpanda:9092 --partitions 24 --replicas 1 || true;
+      rpk topic create rover.telemetry.raw --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      rpk topic create rover.telemetry.clean --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
+      rpk topic create rover.alerts --brokers redpanda:9092 --partitions 4 --replicas 1 || true;
       "
 
   redis:
@@ -93,7 +93,7 @@ services:
       dockerfile: FleetStateMaterialization/Dockerfile
     environment:
       Kafka__BootstrapServers: redpanda:9092
-      Kafka__ConsumersPerTopic: 24
+      Kafka__ConsumersPerTopic: 4
       Redis__Configuration: redis:6379
     depends_on:
       redpanda-init:
