@@ -5,7 +5,6 @@ using StackExchange.Redis;
 public sealed class FleetStateMaterializer : BackgroundService
 {
     private const int DefaultRedisKeyTtlSeconds = 300;
-    private const int StaleAfterSeconds = 30;
     private const string LatestTelemetryPrefix = "fleet:rover:";
     private const string ActiveRoversKey = "fleet:rovers:active";
     private const string LatestAlertsKey = "fleet:alerts:latest";
@@ -151,26 +150,97 @@ public sealed class FleetStateMaterializer : BackgroundService
 
     private async Task MaterializeTelemetryAsync(CleanRoverTelemetryEvent evt, IDatabase db)
     {
-        var state = new RoverFleetState(
-            evt.RoverId,
-            evt.Latitude,
-            evt.Longitude,
-            evt.HeadingDegrees,
-            evt.SpeedMetersPerSecond,
-            evt.BatteryPercent,
-            evt.AirQualityIndex,
-            evt.EventTime,
-            GetStatus(evt),
-            GetActiveAlerts(evt),
-            evt.Sequence,
-            evt.EventId);
+        var stateKey = $"{LatestTelemetryPrefix}{evt.RoverId}:latest";
+        var eventTimeUtc = ToUtc(evt.EventTime);
 
-        var json = JsonSerializer.Serialize(state, JsonOptions);
+        while (true)
+        {
+            var currentValue = await db.StringGetAsync(stateKey);
+            if (currentValue.HasValue && TryGetLastSeenUtc(currentValue, out var lastSeenUtc) && eventTimeUtc <= lastSeenUtc)
+            {
+                _logger.LogDebug(
+                    "Skipping out-of-order telemetry event {EventId} for rover {RoverId}. EventTime={EventTime:o}, LastSeen={LastSeen:o}.",
+                    evt.EventId,
+                    evt.RoverId,
+                    eventTimeUtc,
+                    lastSeenUtc);
+                return;
+            }
 
-        await Task.WhenAll(
-            db.StringSetAsync($"{LatestTelemetryPrefix}{evt.RoverId}:latest", json, _redisKeyTtl),
-            db.SetAddAsync(ActiveRoversKey, evt.RoverId),
-            db.KeyExpireAsync(ActiveRoversKey, _redisKeyTtl));
+            var state = new RoverFleetState(
+                evt.RoverId,
+                evt.Latitude,
+                evt.Longitude,
+                evt.HeadingDegrees,
+                evt.SpeedMetersPerSecond,
+                evt.BatteryPercent,
+                evt.AirQualityIndex,
+                eventTimeUtc,
+                GetStatus(evt),
+                GetActiveAlerts(evt),
+                evt.Sequence,
+                evt.EventId);
+
+            var json = JsonSerializer.Serialize(state, JsonOptions);
+            var transaction = db.CreateTransaction();
+
+            if (currentValue.HasValue)
+            {
+                transaction.AddCondition(Condition.StringEqual(stateKey, currentValue));
+            }
+            else
+            {
+                transaction.AddCondition(Condition.KeyNotExists(stateKey));
+            }
+
+            _ = transaction.StringSetAsync(stateKey, json, _redisKeyTtl);
+            _ = transaction.SetAddAsync(ActiveRoversKey, evt.RoverId);
+            _ = transaction.KeyExpireAsync(ActiveRoversKey, _redisKeyTtl);
+
+            if (await transaction.ExecuteAsync())
+            {
+                return;
+            }
+        }
+    }
+
+    private static bool TryGetLastSeenUtc(RedisValue value, out DateTime lastSeenUtc)
+    {
+        try
+        {
+            var currentState = JsonSerializer.Deserialize<RoverFleetState>(value!, JsonOptions);
+            if (currentState is not null && currentState.LastSeenUtc > DateTime.UnixEpoch)
+            {
+                lastSeenUtc = ToUtc(currentState.LastSeenUtc);
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        lastSeenUtc = default;
+        return false;
+    }
+
+    private static DateTime ToUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            : value.ToUniversalTime();
+
+    private static string GetStatus(CleanRoverTelemetryEvent evt)
+    {
+        if (!evt.IsAlive || evt.BatteryPercent <= 0 || string.Equals(evt.EventType, "rover_died", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Dead";
+        }
+
+        if (evt.BatteryPercent <= 20 || evt.AirQualityIndex >= 100)
+        {
+            return "Warning";
+        }
+
+        return "Healthy";
     }
 
     private async Task MaterializeAlertAsync(FleetAlert alert, IDatabase db)
@@ -185,26 +255,6 @@ public sealed class FleetStateMaterializer : BackgroundService
         batch.Execute();
 
         await Task.WhenAll(pushAlert, trimAlerts, expireAlerts, setAlert);
-    }
-
-    private static string GetStatus(CleanRoverTelemetryEvent evt)
-    {
-        if (!evt.IsAlive || evt.BatteryPercent <= 0 || string.Equals(evt.EventType, "rover_died", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Dead";
-        }
-
-        if (DateTime.UtcNow - evt.EventTime.ToUniversalTime() > TimeSpan.FromSeconds(StaleAfterSeconds))
-        {
-            return "Stale";
-        }
-
-        if (evt.BatteryPercent <= 20 || evt.AirQualityIndex >= 100)
-        {
-            return "Warning";
-        }
-
-        return "Healthy";
     }
 
     private static IReadOnlyList<string> GetActiveAlerts(CleanRoverTelemetryEvent evt)

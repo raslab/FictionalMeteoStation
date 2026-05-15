@@ -11,6 +11,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 });
 
 var app = builder.Build();
+var staleAfter = TimeSpan.FromSeconds(builder.Configuration.GetValue("Fleet:StaleAfterSeconds", 120));
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -38,7 +39,7 @@ app.MapGet("/api/fleet/state", async (IConnectionMultiplexer redis) =>
         .Select(value => JsonSerializer.Deserialize<RoverFleetState>(value!, RedisJson.Options))
         .OfType<RoverFleetState>()
         .Where(FleetStateValidation.IsCurrentShape)
-        .Select(Freshness.Apply)
+        .Select(state => Freshness.Apply(state, staleAfter))
         .OrderBy(state => state.RoverId)
         .ToArray();
 
@@ -87,16 +88,14 @@ static class FleetStateValidation
 
 static class Freshness
 {
-    private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(30);
-
-    public static RoverFleetState Apply(RoverFleetState state)
+    public static RoverFleetState Apply(RoverFleetState state, TimeSpan staleAfter)
     {
         var activeAlerts = state.ActiveAlerts ?? Array.Empty<string>();
         var lastSeen = state.LastSeenUtc.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(state.LastSeenUtc, DateTimeKind.Utc)
             : state.LastSeenUtc.ToUniversalTime();
 
-        if (DateTime.UtcNow - lastSeen <= StaleAfter || state.Status == "Dead")
+        if (DateTime.UtcNow - lastSeen <= staleAfter || state.Status == "Dead")
         {
             return state with { LastSeenUtc = lastSeen, ActiveAlerts = activeAlerts };
         }
